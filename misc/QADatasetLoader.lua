@@ -87,6 +87,10 @@ function QADatasetLoader:__init(opt)
   for k,v in pairs(self.split_ix) do
     print(string.format('assigned %d images to split %s', #v, k))
   end
+  -- debug info
+  for k,v in pairs(self.split_qa_ix) do
+    print(string.format('assigned %d qa pairs to split %s', #v, k))
+  end
 end
 
 function QADatasetLoader:resetIterator(split)
@@ -135,6 +139,14 @@ function QADatasetLoader:getMultipleChoices(id)
   return mc_labels[1]:long():t()
 end
 
+function QADatasetLoader:testTest()
+    local split = "test"
+    local split_ix = self.split_ix[split]
+    local max_index = #split_ix
+    print(string.format('split:%s  max_index:%s', split, max_index))
+    return split
+end
+
 function QADatasetLoader:getBatch(opt)
   local split = utils.getopt(opt, 'split') -- lets require that user passes this in, for safety
   local batch_size = utils.getopt(opt, 'batch_size', 16) -- how many images get returned at one time (to go through CNN)
@@ -176,7 +188,10 @@ function QADatasetLoader:getBatch(opt)
     else
       local ri = self.qa_iterators[split] -- get next index from iterator
       local ri_next = ri + 1 -- increment iterator
-      if ri_next > max_qa_index then ri_next = 1; wrapped = true end
+      if ri_next > max_qa_index then 
+          ri_next = 1; wrapped = true 
+          print(string.format('ri_next:%s gt max_qa_index:%s', ri_next, max_qa_index))
+      end
       self.qa_iterators[split] = ri_next
       ix, ixl = unpack(split_qa_ix[ri])
       ix = self:getImageIndex(ix)
@@ -235,5 +250,6 @@ function QADatasetLoader:getBatch(opt)
   -- raw image pixel range [0, 1]
   data.images:mul(255)
 
+  --return data
   return data
 end

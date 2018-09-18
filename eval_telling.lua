@@ -98,6 +98,7 @@ local function eval_split(split, evalopt)
   local loss_sum = 0
   local loss_evals = 0
   local predictions = {}
+  local record_per_sample = 100
   while num_image_eval < 0 or n < num_image_eval do
 
     -- get batch of data  
@@ -147,9 +148,12 @@ local function eval_split(split, evalopt)
         local k = selected[1]
         if k == 1 then ncorrect = ncorrect + 1 end
         -- record predictions
-        local answers = net_utils.decode_sequence(vocab, labels[{{offset+1, offset+mc_length}}])
-        local entry = {qa_id = batch.qa_id[j], question = questions[j], answer = answers[k], selected=k}
-        table.insert(predictions, entry)
+        if (n - #batch.infos + j) % record_per_sample == 0 then
+            local answers = net_utils.decode_sequence(vocab, labels[{{offset+1, offset+mc_length}}])
+            local entry = {qa_id = batch.qa_id[j], question = questions[j], answer = answers[k], selected=k}
+            table.insert(predictions, entry)
+            print(string.format("current #%s samples, accuracy:%s", (n - #batch.infos + j), ncorrect/n))
+        end
         if verbose then
           print(string.format('question %s: %s ? %s .', entry.qa_id, entry.question, entry.answer))
         end
@@ -180,7 +184,10 @@ local function eval_split(split, evalopt)
     end
 
     if loss_evals % 10 == 0 then collectgarbage() end
-    if batch.bounds.wrapped then break end -- the split ran out of data, lets break out
+    if batch.bounds.wrapped then 
+        print('batch.bounds.wrapped is true')
+        break 
+    end -- the split ran out of data, lets break out
   end
 
   local accuracy
@@ -191,10 +198,13 @@ local function eval_split(split, evalopt)
   return loss_sum/loss_evals, predictions, accuracy
 end
 
+local start_time = os.clock()
 local loss, split_predictions, acc = eval_split(opt.split, {num_image_eval = opt.num_image_eval, verbose=opt.verbose})
+local end_time = os.clock()
 print('loss: ', loss)
 print('acc: ', acc)
+print(string.format('Elapsed time: %.2f seconds', end_time - start_time))
 
 -- dump the json
 json_struct = {split_predictions = split_predictions, loss = loss, acc = acc}
-utils.write_json(string.format('results/results_%s.json', opt.split), json_struct)
+utils.write_json(string.format('results/results_%s_%s.json', opt.split, os.time(os.date("!*t"))), json_struct)
