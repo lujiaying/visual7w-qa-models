@@ -13,15 +13,31 @@ local net_utils = require 'misc.net_utils'
 -------------------------------------------------------------------------------
 
 -- You can replace it with your own image
-local image_file = 'data/demo.jpg'
+--local image_file = 'data/demo.jpg'
+local image_file = 'images/v7w_1.jpg'
 
 -- You can write your own questions here
+--local questions = {
+--  'how many people are there?',
+--  'what animal can be seen in the picture?',
+--  'who is wearing a red shirt?',
+--  'what color is the elephant?',
+--  'when is the picture taken?'
+--}
 local questions = {
-  'How many people are there?',
-  'What animal can be seen in the picture?',
-  'Who is wearing a red shirt?',
-  'What color is the elephant?',
-  'When is the picture taken?'
+  "What color is the sidewalk?",
+  "Where are the men talking?",
+  "What is on the sidewalk's edge?",
+  "How many cars are parked?",
+  "What is on the sidewalk?",
+  "How is the sidewalk paved?",
+  "What is on the sidewalk?",
+  "Where are trees?",
+  "Who is wearing black pants?",
+  "Who is wearing a gray jacket?",
+  "What are the people doing?",
+  "What is the street lined with?",
+  "How are the cars parked?"
 }
 
 -------------------------------------------------------------------------------

@@ -82,6 +82,7 @@ modules.rnn:createClones() -- reconstruct clones inside the language model
 if gpu_mode then for k,v in pairs(modules) do v:cuda() end end
 
 collectgarbage() -- free some memory
+timestamp = os.time(os.date("!*t"))
 
 -------------------------------------------------------------------------------
 -- Evaluation fun(ction)
@@ -99,6 +100,10 @@ local function eval_split(split, evalopt)
   local loss_evals = 0
   local predictions = {}
   local record_per_sample = 100
+  -- write result to file
+  local file_path = string.format('results/details_%s_%s.txt', opt.split, timestamp)
+  detail_file = io.open(file_path, 'w')
+
   while num_image_eval < 0 or n < num_image_eval do
 
     -- get batch of data  
@@ -147,6 +152,14 @@ local function eval_split(split, evalopt)
         local _, selected = mc_loss:min(1)
         local k = selected[1]
         if k == 1 then ncorrect = ncorrect + 1 end
+        local answers = net_utils.decode_sequence(vocab, labels[{{offset+1, offset+mc_length}}])
+        -- record details
+        local detail = {batch.qa_id[j], questions[j], k}
+        for idx_ans = 1, #answers do
+          table.insert(detail, string.format("%s\t%s", answers[idx_ans], mc_loss[idx_ans]))
+        end
+        detail_file:write(table.concat(detail, "\001"))
+        detail_file:write("\n")
         -- record predictions
         if (n - #batch.infos + j) % record_per_sample == 0 then
             local answers = net_utils.decode_sequence(vocab, labels[{{offset+1, offset+mc_length}}])
@@ -195,6 +208,7 @@ local function eval_split(split, evalopt)
     accuracy = ncorrect / n
   end
 
+  detail_file:close()
   return loss_sum/loss_evals, predictions, accuracy
 end
 
@@ -207,4 +221,4 @@ print(string.format('Elapsed time: %.2f seconds', end_time - start_time))
 
 -- dump the json
 json_struct = {split_predictions = split_predictions, loss = loss, acc = acc}
-utils.write_json(string.format('results/results_%s_%s.json', opt.split, os.time(os.date("!*t"))), json_struct)
+utils.write_json(string.format('results/results_%s_%s.json', opt.split, timestamp), json_struct)

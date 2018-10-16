@@ -1,5 +1,6 @@
 import json
 import random
+import time
 import os
 from collections import Counter
 import h5py
@@ -53,6 +54,136 @@ def get_similar_word_by_emb(w2v, answer, topk=3):
         else:
             ans_emb += w2v[token]
     return w2v.similar_by_vector(ans_emb, topn=topk)
+
+def preprocess_inferSent_emb():
+    """
+    Convert sentence to int, produce w2v and id2sen files
+    """
+    inferSent_path = '%s/dataset.InferSent.vec' % (DIR_DATA_SET_TELLING)
+    w2v_path = './data/inferSent.w2v.txt'
+    id2sent_path = './data/inferSent.dict'
+    dictionary = {}
+    line_cnt = 0
+    with open(inferSent_path) as fopen, open(w2v_path, 'w') as fwrite:
+        fwrite.write('108626 4096\n')
+        for line in fopen:
+            sent, vec = line.strip().split('\t')
+            dictionary[line_cnt] = sent
+            fwrite.write('%s %s\n' % (line_cnt, vec))
+            line_cnt += 1
+    json.dump(dictionary, open(id2sent_path, 'w'))
+    return 
+
+def generate_cosine_matrix_inferSent():
+    """
+    Due to the scale of inferSent matric, the efficient way to find the most similar sentence is matrix multiplication
+
+    Reference: https://stackoverflow.com/questions/41905029/create-cosine-similarity-matrix-numpy?rq=1
+    """
+    print('%s, start' % (time.ctime()))
+    n_size = 108626 
+    n_dimension = 4096
+
+    emb_matrix = np.zeros((n_size, 4096))
+    inferSent_path = '%s/dataset.InferSent.vec' % (DIR_DATA_SET_TELLING)
+    with open(inferSent_path) as fopen:
+        line_cnt = 0
+        for line in fopen:
+            sent, vec = line.strip().split('\t')
+            vec_arr = [float(_) for _ in vec.split(' ')]
+            emb_matrix[line_cnt] = vec_arr
+            line_cnt += 1
+    print('%s, matrix load DONE' % (time.ctime()))
+
+    #d = np.dot(emb_matrix, emb_matrix.T)
+    # dot memory not enough
+    d = np.zeros((n_size, n_size))  # still too large
+    for i in tqdm.tqdm(range(n_size)):
+        for j in range(n_size):
+            d[i][j] = np.dot(emb_matrix[i], emb_matrix[j])
+    print('%s, dot DONE' % (time.ctime()))
+
+    norm = (emb_matrix * emb_matrix).sum(1) ** .5
+    print('%s, norm DONE' % (time.ctime()))
+
+    sim_matrix = d / norm / norm.T
+    print('%s, sim matrix DONE' % (time.ctime()))
+    json.dump(sim_matrix.tolist(), open('data/inferSent.sim_matrix.json', 'w'), indent=2)
+    return
+
+def generate_similar_sentence_by_inferSent():
+    print('%s, start' % (time.ctime()))
+    wv_from_text = KeyedVectors.load_word2vec_format('./data/inferSent.w2v.txt', binary=False)
+    id2sent = json.load(open('./data/inferSent.dict'))
+    sent2id = dict([(id2sent[_], _) for _ in id2sent])
+    print('%s, load DONE' % (time.ctime()))
+    
+    test_correct_ans_path = '%s/all_correct_answer' % (DIR_DATA_SET_TELLING)
+    similar_sent_path = '%s/similar_sent.inferSent.txt' % (DIR_DATA_SET_TELLING)
+    with open(test_correct_ans_path) as fopen, open(similar_sent_path, 'w') as fwrite:
+        for line in tqdm.tqdm(fopen):
+            line_list = line.strip().split('\t')
+            ans_id = sent2id[line_list[0].lower()]
+            res = wv_from_text.similar_by_vector(str(ans_id), 5)
+            res_detail = [(id2sent[_[0]], _[1]) for _ in res]
+            fwrite.write('%s\t%s\t%s\n' % (line_list[0], line_list[1], json.dumps(res_detail)))
+    print('%s, generate DONE' % (time.ctime()))
+    return
+
+def generate_all_test_correct_answer():
+    # Load original dataset
+    dataset = json.load(open(PATH_DATA_SET_TELLING, 'r'))
+    all_correct_ans = {}
+
+    for image_idx in tqdm.tqdm(range(len(dataset['images']))):
+        image = dataset['images'][image_idx]
+        img_split = image['split']
+        if img_split != 'test':
+            continue
+        for qa_pair_idx in range(len(image['qa_pairs'])):
+            qa_pair = image['qa_pairs'][qa_pair_idx]
+            qa_type = qa_pair['type']
+            correct_ans = qa_pair['answer']
+            if correct_ans not in all_correct_ans:
+                all_correct_ans[correct_ans] = 0
+            all_correct_ans[correct_ans] += 1
+
+    with open('%s/all_correct_answer' % (DIR_DATA_SET_TELLING), 'w') as fwrite:
+        for k, v in sorted(all_correct_ans.items(), key=lambda _:_[1], reverse=True):
+            fwrite.write('%s\t%s\n' % (k, v))
+    return
+
+def get_inferSent_embbedings():
+    similar_sent_dict = {}
+    with open('%s/similar_sent.inferSent.txt' % (DIR_DATA_SET_TELLING)) as fopen:
+        for line in tqdm.tqdm(fopen):
+            line_list = line.strip().split('\t')
+            correct_ans = line_list[0]
+            similar_snet_list = json.loads(line_list[2])
+            similar_sent_dict[correct_ans] = similar_snet_list
+    return similar_sent_dict
+
+def generate_distracting_answer_inferSent(correct_ans, similar_sent_dict):
+    """
+    Args:
+        correct_ans: str
+        similar_sent_dict: dict, {sent:[(sent_s, sim_s), ()]}
+    """
+    res = []
+    if isinstance(correct_ans, unicode):
+        correct_ans = correct_ans.encode('utf8')
+    correct_ans_processed = correct_ans.lower().translate(None, string.punctuation).strip()
+    for sent, score in similar_sent_dict[correct_ans]:
+        if isinstance(sent, unicode):
+            sent = sent.encode('utf8')
+        sent_processed = sent.lower().translate(None, string.punctuation).strip()
+        if correct_ans_processed == sent_processed:
+            continue
+        else:
+            res.append(sent)
+            if len(res) == 3:
+                break
+    return res
 
 def generate_distracting_answer_by_top(question_type, top_answers_split):
     """
@@ -139,6 +270,10 @@ def main():
     # Load word embeddings
     wv_from_text = KeyedVectors.load_word2vec_format('./data/w2v_telling_gpu.txt', binary=False)
 
+    # load inferSent emb
+    similar_sent_dict = get_inferSent_embbedings()
+    error_multiple_choices = 0
+
     # Generate distracting answers
     for image_idx in tqdm.tqdm(range(len(dataset['images']))):
         image = dataset['images'][image_idx]
@@ -152,12 +287,17 @@ def main():
             #qa_pair['multiple_choices'] = generate_distracting_answer_by_top(qa_type, top_answer_train)
             #qa_pair['multiple_choices'] = generate_distracting_answer_dump(qa_type, top_answer_train)
             #qa_pair['multiple_choices'] = [_[0] for _ in get_similar_word_by_emb(wv_from_text, correct_ans)]
-            qa_pair['multiple_choices'] = generate_distracting_answer_add_top(qa_type, top_answer_train, correct_ans)
+            #qa_pair['multiple_choices'] = generate_distracting_answer_add_top(qa_type, top_answer_train, correct_ans)
+            qa_pair['multiple_choices'] = generate_distracting_answer_inferSent(correct_ans, similar_sent_dict)
+            if len(qa_pair['multiple_choices']) != 3:
+                error_multiple_choices += 1
 
     #distract_ans_path = '%s/dataset_distract_train_top3.json' % (DIR_DATA_SET_TELLING)   # use top3 of training data to replace
     #distract_ans_path = '%s/dataset_distract_train_dump_top3.json' % (DIR_DATA_SET_TELLING) # use other type top3 'train split' to replace
     #distract_ans_path = '%s/dataset_distract_word_emb.json' % (DIR_DATA_SET_TELLING) # use embedding top3 similarity 
-    distract_ans_path = '%s/dataset_distract_add_top.json' % (DIR_DATA_SET_TELLING) # add phrase of top3 answer 
+    #distract_ans_path = '%s/dataset_distract_add_top.json' % (DIR_DATA_SET_TELLING) # add phrase of top3 answer 
+    distract_ans_path = '%s/dataset_distract_inferSent.json' % (DIR_DATA_SET_TELLING) # inferSent for similar sent embed
+    print('error_multiple_choices:%s' % (error_multiple_choices))
     with open(distract_ans_path, 'w') as fw:
         json.dump(dataset, fw, indent=2)
 
@@ -185,3 +325,9 @@ if __name__ == '__main__':
     res = get_similar_word_by_emb(wv_from_text, ans)
     print(ans, res)
     """
+
+    # sentence encoding
+    # preprocess_inferSent_emb()
+    # generate_cosine_matrix_inferSent()
+    #generate_all_test_correct_answer()
+    #generate_similar_sentence_by_inferSent()
