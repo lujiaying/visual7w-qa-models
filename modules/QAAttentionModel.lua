@@ -117,6 +117,7 @@ function layer:sample(fc_feats, conv_feats, question_labels, question_lengths, o
   local seq = torch.LongTensor(self.seq_length, batch_size):zero()
   local seqLogprobs = torch.FloatTensor(self.seq_length, batch_size)
   local logprobs -- logprobs predicted in last time step
+  local seqLogprobs_pertime = torch.FloatTensor(self.seq_length+2, batch_size, self.vocab_size+1)
   for i = 1, batch_size do
     -- initialize state
     self:_createInitState(1)
@@ -178,13 +179,15 @@ function layer:sample(fc_feats, conv_feats, question_labels, question_lengths, o
       local inputs = {xt,unpack(state)}
       local out = self.core:forward(inputs)
       logprobs = out[self.num_state+1] -- last element is the output vector
+      -- print(string.format('debug, logprobs size:%s', logprobs:size()))  -- 1XMp1
+      seqLogprobs_pertime[t][i] = logprobs[1]:float()
       state = {}
       for j=1,self.num_state do table.insert(state, out[j]) end
     end
 
   end
   -- return the samples and their log likelihoods
-  return seq, seqLogprobs
+  return seq, seqLogprobs, seqLogprobs_pertime
 end
 
 --[[
