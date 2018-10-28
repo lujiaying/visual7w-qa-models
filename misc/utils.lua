@@ -86,4 +86,27 @@ function utils.split_question_answer(labels, question_length, answer_length, que
   return question_labels, answer_labels
 end
 
+--[[
+answer_logprobs: size (D+2)xN, which only contains answer tokens
+answer_lengths: size N
+gpu_mode: boolean
+
+returns a N Tensor.
+--]]
+function utils.cal_answer_sum_logp(answer_logprobs, answer_lengths, gpu_mode)
+  if gpu_mode == nil then gpu_mode = false end
+  local L = answer_logprobs:size(1)
+  local D = L-2
+  local N = answer_logprobs:size(2)
+  local seq_sum_logprobs = torch.FloatTensor(N):zero()
+  if gpu_mode then seq_sum_logprobs:cuda() end
+
+  for b=1, N do
+    for t=1, answer_lengths[b] do
+      seq_sum_logprobs[b] = seq_sum_logprobs[b] + answer_logprobs[{t,b}]
+    end
+  end
+  return seq_sum_logprobs
+end
+
 return utils

@@ -1,34 +1,45 @@
 require 'nn'
+require 'math'
 
 -------------------------------------------------------------------------------
 -- Policy Gradient QA Criterion
 -------------------------------------------------------------------------------
 
 local crit, parent = torch.class('nn.QAPGCriterion', 'nn.Criterion')
-function crit:__init(env)
+function crit:__init(env, gpu_mode)
   parent.__init(self)
 
   -- Environment to produce rewards
   self.env = env
+  self.gpu_mode = gpu_mode -- true or false
 end
 
 --[[
-input: {images(NxCxHxW), labels(DxN), question_lengths(N)}
+input: {images(NxCxHxW), labels(DxN), question_lengths(N), sample_sum_logprobs(N)}
 targets: nil
 
 returns a float number
 --]]
 function crit:updateOutput(input, targets)
-  local images, labels, question_lengths = unpack(input)
+  local images, labels, question_lengths, sample_sum_logprobs = unpack(input)
   local batch_size = labels:size(2)
   local image_encodings = self.env.cnn:forward(images)
   local conv_feat_maps = self.env.cnn:get(30).output:clone()
   conv_feat_maps = conv_feat_maps:view(batch_size, 512, -1)
-  local logprobs = self.env.rnn:forward{image_encodings, conv_feat_maps, labels}
-  self.output = self.env.crit:forward(logprobs, {labels, question_lengths})
-  self.reward_per_sample = env.crit.loss_per_sample
-  -- negative loss is reward, size N
-  self.reward_per_sample = self.reward_per_sample:cmul(torch.Tensor(batch_size):fill(-1))
+  local qa_logprobs = self.env.rnn:forward{image_encodings, conv_feat_maps, labels}
+  self.env.crit:forward(qa_logprobs, {labels, question_lengths})
+
+  self.reward_per_sample = -1 * env.crit.loss_per_sample
+  print(string.format('before rescale reward: %s \n\n', self.reward_per_sample))
+  -- reward = -1 * MLE_loss, size N, equals to logprob of sequence;
+  -- then scale reward to a positive num; w_rescale * exp(reward)
+  local w_rescale = 10
+  self.reward_per_sample = w_rescale * torch.exp(self.reward_per_sample)
+
+  -- loss/output = sum(-reward * sample_sum_logp) / batch_size
+  print(string.format('reward and logprobs: %s \n %s\n\n', self.reward_per_sample, sample_sum_logprobs))
+  self.output = torch.sum( (-1*self.reward_per_sample:clone()):cmul(sample_sum_logprobs) )
+  self.output = self.output / batch_size
   return self.output
 end
 
@@ -38,7 +49,6 @@ gradOutput: nil
 
 returns a (D+2)xNx(M+1) Tensor.
 --]]
---function crit:updateGradInput(logprobs, labels, question_lengths)
 function crit:updateGradInput(input, gradOutput)
   local logprobs, labels, question_lengths = unpack(input)
   local L, N, Mp1 = logprobs:size(1), logprobs:size(2), logprobs:size(3)
@@ -64,11 +74,8 @@ function crit:updateGradInput(input, gradOutput)
       end
       -- if there is a non-null next token, enforce loss!
       if target_index ~= 0 then
-        local one_hot = logprobs[{ t,b }]:clone():zero()
-        one_hot[target_index] = 1
-        print(string.format('logprobs[{t,b}] size:%s, one_hot size:%s', logprobs[{t,b}]:size(), one_hot:size()))
-        print(string.format('reward: %s', reward))
-        self.gradInput[{ t,b }] = reward * (logprobs[{ t,b }] - one_hot)
+        print(string.format('gradInput[{%s,%s,%s}] reward:%s', t, b, target_index, reward))
+        self.gradInput[{ t,b,target_index }] = - reward
       end
     end
   end

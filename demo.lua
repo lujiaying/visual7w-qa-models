@@ -29,6 +29,12 @@ local image_file = 'images/v7w_1.jpg'
 local questions = {
   "What color is the sidewalk?",
   "Where are the men talking?",
+  "What is on the sidewalk's edge?"
+}
+--[[
+local questions = {
+  "What color is the sidewalk?",
+  "Where are the men talking?",
   "What is on the sidewalk's edge?",
   "How many cars are parked?",
   "What is on the sidewalk?",
@@ -41,6 +47,7 @@ local questions = {
   "What is the street lined with?",
   "How are the cars parked?"
 }
+]]--
 
 -------------------------------------------------------------------------------
 -- Input arguments and options
@@ -102,7 +109,7 @@ if gpu_mode then
 end
 env.cnn:evaluate()
 env.rnn:evaluate()
-local qa_pg_crit = nn.QAPGCriterion(env)
+local qa_pg_crit = nn.QAPGCriterion(env, gpu_mode)
 if gpu_mode then qa_pg_crit:cuda() end
 
 local function get_sequence_token_cnt(sequence)
@@ -116,6 +123,7 @@ end
 -------------------------------------------------------------------------------
 -- Prepare inputs
 -------------------------------------------------------------------------------
+print(string.format('vocab size:%s', vocab_size))
 local MAX_Q_LEN = 15
 local num_q = #questions
 local question_labels = torch.LongTensor(MAX_Q_LEN, num_q):zero()
@@ -131,6 +139,8 @@ for k, q in pairs(questions) do
   q_len[k] = q_len[k] + 1
   question_labels[q_len[k]][k] = vocab_size
 end
+print(string.format('Question labels: %s', question_labels))
+print(string.format('Question lens: %s', q_len))
 
 -------------------------------------------------------------------------------
 -- Start demo
@@ -158,6 +168,14 @@ collectgarbage() -- free some memory
 local answer_labels, seq_logprobs, seq_logprobs_pertime = rnn:sample(image_encodings, conv_feat_maps, question_labels, q_len)
 local answers = net_utils.decode_sequence(vocab, answer_labels)
 print(string.format("seq_logprobs size:%s, seq_logprobs_pertime size:%s", seq_logprobs:size(), seq_logprobs_pertime:size()))
+print(string.format("answer_labels: %s", answer_labels))
+
+local a_len = torch.LongTensor(num_q):zero()
+for k = 1, #answers do
+  local cur_a_len = get_sequence_token_cnt(answers[k])
+  a_len[k] = cur_a_len
+end
+local answer_sum_logprobs = utils.cal_answer_sum_logp(seq_logprobs, a_len, gpu_mode)
 
 rnn = nil
 collectgarbage() -- free some memory
@@ -168,21 +186,22 @@ local images = torch.Tensor(num_q, img:size(2), img:size(3), img:size(4)):cuda()
 print(string.format('images size:%s', images:size()))
 local max_q_len = 15 --15 in train
 local max_a_len = 5
-local labels = torch.LongTensor(#answers, max_q_len+max_a_len)
-local seq = torch.LongTensor(max_q_len+max_a_len):zero()
+local labels = torch.LongTensor(#answers, max_q_len+max_a_len):zero()  -- question + answer
 for k=1, num_q do
+  local seq = torch.LongTensor(max_q_len+max_a_len):zero()
   local question_label = question_labels[{ {}, k }]
   seq[{{1, q_len[k]}}] = question_label[{{1, q_len[k]}}]
-  seq[q_len[k]+1] = vocab_size
-  local cur_a_len = get_sequence_token_cnt(answers[k])
+  -- seq[q_len[k]+1] = vocab_size   -- Already add <START> token to original question
   local answer_label = answer_labels[{ {}, k }]
-  seq[{{q_len[k]+2, q_len[k]+cur_a_len+1}}] = answer_label[{{1, cur_a_len}}]
+  seq[{{q_len[k]+1, q_len[k]+a_len[k]}}] = answer_label[{{1, a_len[k]}}]
   labels[k] = seq
   images[k] = img:clone()
 end
+print(string.format('labels(q+a): %s', labels))
 labels = labels:transpose(1,2):contiguous()
-local pg_loss = qa_pg_crit:forward({images, labels, q_len:contiguous()}, {})
+local pg_loss = qa_pg_crit:forward({images, labels, q_len:contiguous(), answer_sum_logprobs}, {})
 print(string.format('images size:%s', images:size()))
+print(string.format('answer lens:%s', a_len))
 print(string.format('policy_gradient loss:%s', pg_loss))
 if gpu_mode then seq_logprobs_pertime = seq_logprobs_pertime:cuda() end
 local dlogprobs = qa_pg_crit:backward({seq_logprobs_pertime, labels, q_len:contiguous()}, {})
@@ -197,12 +216,10 @@ print('** QA demo on ' .. image_file .. ' **\n')
 for k = 1, #answers do
   print(string.format('Q: %s ?', questions[k]))
   print(string.format('A: %s .', answers[k]))
-  local answer_len = get_sequence_token_cnt(answers[k])
   local actual_seq_logprobs = {}
-  for t = 1, answer_len do
+  for t = 1, a_len[k] do
     table.insert(actual_seq_logprobs, seq_logprobs[{t, k}])
   end
-  --print(string.format("Answer logprobs: %s", seq_logprobs[{ {},k }]))
   print( string.format("Answer len:%s, logprobs: %s", answer_len, table.concat(actual_seq_logprobs, ", ")) )
   print('\n')
 end
