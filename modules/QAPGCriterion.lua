@@ -6,12 +6,11 @@ require 'math'
 -------------------------------------------------------------------------------
 
 local crit, parent = torch.class('nn.QAPGCriterion', 'nn.Criterion')
-function crit:__init(env, gpu_mode)
+function crit:__init(env)
   parent.__init(self)
 
   -- Environment to produce rewards
   self.env = env
-  self.gpu_mode = gpu_mode -- true or false
 end
 
 --[[
@@ -29,15 +28,15 @@ function crit:updateOutput(input, targets)
   local qa_logprobs = self.env.rnn:forward{image_encodings, conv_feat_maps, labels}
   self.env.crit:forward(qa_logprobs, {labels, question_lengths})
 
-  self.reward_per_sample = -1 * env.crit.loss_per_sample
-  print(string.format('before rescale reward: %s \n\n', self.reward_per_sample))
+  self.reward_per_sample = -1 * self.env.crit.loss_per_sample
+  --print(string.format('before rescale reward: %s \n\n', self.reward_per_sample))
   -- reward = -1 * MLE_loss, size N, equals to logprob of sequence;
   -- then scale reward to a positive num; w_rescale * exp(reward)
-  local w_rescale = 10
+  local w_rescale = 1000
   self.reward_per_sample = w_rescale * torch.exp(self.reward_per_sample)
 
   -- loss/output = sum(-reward * sample_sum_logp) / batch_size
-  print(string.format('reward and logprobs: %s \n %s\n\n', self.reward_per_sample, sample_sum_logprobs))
+  --print(string.format('reward and logprobs: %s \n %s\n\n', self.reward_per_sample, sample_sum_logprobs))
   self.output = torch.sum( (-1*self.reward_per_sample:clone()):cmul(sample_sum_logprobs) )
   self.output = self.output / batch_size
   return self.output
@@ -74,7 +73,7 @@ function crit:updateGradInput(input, gradOutput)
       end
       -- if there is a non-null next token, enforce loss!
       if target_index ~= 0 then
-        print(string.format('gradInput[{%s,%s,%s}] reward:%s', t, b, target_index, reward))
+        --print(string.format('gradInput[{%s,%s,%s}] reward:%s', t, b, target_index, reward))
         self.gradInput[{ t,b,target_index }] = - reward
       end
     end

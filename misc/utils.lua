@@ -86,6 +86,27 @@ function utils.split_question_answer(labels, question_length, answer_length, que
   return question_labels, answer_labels
 end
 
+function utils.pack_question_answer(question_labels, q_lens, answer_labels, a_lens, seq_len)
+  assert(question_labels:size()[2] == answer_labels:size()[2], 'error: question answer batch size NOT equal')
+  local batch_size = question_labels:size()[2]
+  local max_q_len = q_lens:max()
+  local max_a_len = a_lens:max()
+  if max_q_len + max_a_len > seq_len then
+    print(string.format('q_len:%s, a_len:%s, seq_len:%s', max_q_len, max_a_len, seq_len))
+  end
+  local labels = torch.LongTensor(batch_size, seq_len):zero()
+  for k=1, batch_size do
+    local seq = torch.LongTensor(seq_len):zero()
+    local question_label = question_labels[{ {}, k }]
+    seq[{{1, q_lens[k]}}] = question_label[{{1, q_lens[k]}}]
+    local answer_label = answer_labels[{ {}, k }]
+    seq[{{q_lens[k]+1, q_lens[k]+a_lens[k]}}] = answer_label[{{1, a_lens[k]}}]
+    labels[k] = seq
+  end
+  labels = labels:transpose(1,2):contiguous()
+  return labels
+end
+
 --[[
 answer_logprobs: size (D+2)xN, which only contains answer tokens
 answer_lengths: size N
@@ -107,6 +128,24 @@ function utils.cal_answer_sum_logp(answer_logprobs, answer_lengths, gpu_mode)
     end
   end
   return seq_sum_logprobs
+end
+
+--[[
+sequences: a list of string
+
+returns a size #sequences tensor
+]]--
+function utils.get_sequences_token_cnt(sequences)
+  local token_cnts = torch.zeros(#sequences)
+  for k = 1, #sequences do
+    local token_cnt = 0
+    local sequence = sequences[k]
+    for token in sequence:gmatch('%w+') do
+      token_cnt = token_cnt + 1
+    end
+    token_cnts[k] = token_cnt
+  end
+  return token_cnts
 end
 
 return utils

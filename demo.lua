@@ -100,7 +100,7 @@ rnn:createClones()
 if gpu_mode then rnn:cuda() end
 
 -- prepare QA policy gradient criterion
-env = {}
+local env = {}
 env['rnn'] = rnn:clone()
 env['cnn'] = cnn:clone()
 env['crit'] = nn.QACriterion()
@@ -109,8 +109,10 @@ if gpu_mode then
 end
 env.cnn:evaluate()
 env.rnn:evaluate()
-local qa_pg_crit = nn.QAPGCriterion(env, gpu_mode)
-if gpu_mode then qa_pg_crit:cuda() end
+local qa_pg_crit = nn.QAPGCriterion(env)
+if gpu_mode then
+  qa_pg_crit:cuda()
+end
 
 local function get_sequence_token_cnt(sequence)
   local token_cnt = 0
