@@ -114,6 +114,7 @@ function layer:sample(fc_feats, conv_feats, question_labels, question_lengths, o
   local temperature = utils.getopt(opt, 'temperature', 1.0)
   local batch_size = fc_feats:size(1)
 
+  --[[
   -- TODO: update tmax, state and other things while training
   self.state = {}  -- Size: L*num_state*FloatTensor(N*rnn_size)
   -- init state
@@ -134,6 +135,7 @@ function layer:sample(fc_feats, conv_feats, question_labels, question_lengths, o
   end
   self.lookup_tables_inputs = {} -- Size: L*N
   self.tmax = self.seq_length+2 -- we will keep track of max sequence length encountered in the data for efficiency
+  --]]
 
   -- we will write output predictions into tensor seq
   local seq = torch.LongTensor(self.seq_length, batch_size):zero()
@@ -144,9 +146,11 @@ function layer:sample(fc_feats, conv_feats, question_labels, question_lengths, o
     -- initialize state
     self:_createInitState(1)
     local state = self.init_state
+    --[[
     for h=1,self.num_state do
       self.state[0][h][i] = state[h]
     end
+    ]]--
 
     local fc_feat = fc_feats[{{i,i}, {}}]
     local conv_feat = conv_feats[{{i,i}, {}, {}}]
@@ -154,7 +158,7 @@ function layer:sample(fc_feats, conv_feats, question_labels, question_lengths, o
     local offset = question_lengths[i]
 
     for t=1,self.seq_length+2 do
-      self.lookup_tables_inputs[t] = torch.LongTensor(batch_size):fill(1)
+      --self.lookup_tables_inputs[t] = torch.LongTensor(batch_size):fill(1)
 
       local xt, it, sampleLogprobs
       if t == 1 then
@@ -163,12 +167,10 @@ function layer:sample(fc_feats, conv_feats, question_labels, question_lengths, o
       elseif t == 2 then
         -- feed in the start tokens
         it = torch.LongTensor({self.vocab_size+1})
-        self.lookup_tables_inputs[t][i] = it
         xt = self.lookup_table:forward(it)
       elseif t <= 2 + offset then
         -- feed in the question tokens
         it = torch.LongTensor(input_tokens[t-2])
-        self.lookup_tables_inputs[t][i] = it
         xt = self.lookup_table:forward(it)
       else
         -- take predictions from previous time step and feed them in
@@ -189,9 +191,9 @@ function layer:sample(fc_feats, conv_feats, question_labels, question_lengths, o
           sampleLogprobs = logprobs:gather(2, it) -- gather the logprobs at sampled positions
           it = it:view(-1):long() -- and flatten indices for downstream processing
         end
-        self.lookup_tables_inputs[t][i] = it
         xt = self.lookup_table:forward(it)
       end
+      --self.lookup_tables_inputs[t][i] = it
 
       local k = t-2-offset
       if k >= 1 then -- starting answer sequence
@@ -213,25 +215,141 @@ function layer:sample(fc_feats, conv_feats, question_labels, question_lengths, o
       print(self.inputs[t])
       print(inputs)
       ]]--
+      --[[
       for h=1,1+self.num_state do
         --print(string.format('cur h:%s', h))
         self.inputs[t][h][i] = inputs[h]
       end
+      ]]--
       logprobs = out[self.num_state+1] -- last element is the output vector
       -- print(string.format('debug, logprobs size:%s', logprobs:size()))  -- 1XMp1
       seqLogprobs_pertime[t][i] = logprobs[1]:float()
       state = {}
       for j=1,self.num_state do table.insert(state, out[j]) end
+      --[[
       for h=1,self.num_state do
         self.state[t][h][i] = state[h]
       end
+      ]]--
     end
 
   end
   -- set self.init_state to batch mode
-  self.init_state = self.state[0]
+  --self.init_state = self.state[0]
   -- return the samples and their log likelihoods
   return seq, seqLogprobs, seqLogprobs_pertime
+end
+
+function layer:sample_forward(fc_feats, conv_feats, question_labels, question_lengths, opt)
+  local sample_max = utils.getopt(opt, 'sample_max', 1)
+  local temperature = utils.getopt(opt, 'temperature', 1.0)
+  local batch_size = fc_feats:size(1)
+
+  if self.clones == nil then self:createClones() end -- lazily create clones on first forward pass
+
+  assert(question_labels:size(1) == self.seq_length)
+  local batch_size = question_labels:size(2)
+  local max_q_len = torch.max(question_lengths)
+  self.output:resize(self.seq_length+2, batch_size, self.vocab_size+1)
+  
+  -- for update gradient
+  self:_createInitState(batch_size)
+  self.state = {[0] = self.init_state}
+  self.inputs = {}
+  self.lookup_tables_inputs = {}
+  self.tmax = 0 -- we will keep track of max sequence length encountered in the data for efficiency
+
+  -- we will write output predictions into tensor seq
+  self.seq = torch.LongTensor(self.seq_length, batch_size):zero()
+  self.seqLogprobs = torch.FloatTensor(self.seq_length, batch_size)
+
+  for t=1,self.seq_length+2 do
+    local can_skip = false
+    local sampleLogprobs -- size: N
+    local it  -- size: N
+    local xt
+    -- find correct it
+    if t == 1 then
+      -- feed in the images
+      xt = fc_feats -- NxK sized input
+    elseif t == 2 then
+      -- feed in the start tokens
+      it = torch.LongTensor(batch_size):fill(self.vocab_size+1)
+      self.lookup_tables_inputs[t] = it
+      xt = self.lookup_tables[t]:forward(it) -- NxK sized input (token embedding vectors)
+    else
+      -- feed in question or sampled answer tokens
+      if sample_max == 1 then
+        -- use argmax "sampling"
+        sampleLogprobs, it = torch.max(self.output[t-1], 2)
+        sampleLogprobs = sampleLogprobs:view(-1)
+        it = it:view(-1)
+      else
+        -- sample from the distribution of previous predictions
+        local prob_prev = torch.exp(torch.div(self.output[t-1], temperature))
+        it = torch.multinomial(prob_prev, 1)
+        sampleLogprobs = self.output[t-1]:gather(2, it)
+        sampleLogprobs = sampleLogprobs:view(-1)
+        it = it:view(-1)
+      end
+      if t <= 2 + max_q_len then
+        -- feed in the question token when t is less than...
+        for i=1, batch_size do
+          local offset = question_lengths[i]
+          if t <= 2 + offset then
+            it[i] = question_labels[t-2][i]
+          end
+        end -- for i=1, batch_size
+        xt = self.lookup_tables[t]:forward(it)
+      else
+        if torch.sum(it) == 0 or torch.sum(it) >= (self.vocab_size) * batch_size then
+          can_skip = true
+        end
+        it[torch.eq(it,0)] = 1
+        if not can_skip then
+          self.lookup_tables_inputs[t] = it
+          xt = self.lookup_tables[t]:forward(it)
+        end
+      end
+    end
+    
+    -- do forward
+    if not can_skip then
+      --[[TODO
+      print(string.format('enter not can_skip, t=%s', t))
+      print(self.state)
+      print(string.format('t-1=%s, self.num_state=%s', t-1, self.num_state))
+      print(string.format('self.state[t-1][self.num_state] size:%s', self.state[t-1][self.num_state]:size()))
+      --]]
+      local h_state = self.state[t-1][self.num_state]
+      local att = self.attention_nns[t]:forward({conv_feats, h_state})
+      -- construct the inputs
+      xt = torch.cat(xt, att) -- size: Nx(xt_size+att_size)
+      self.inputs[t] = {xt,unpack(self.state[t-1])}
+      -- forward the network
+      local out = self.clones[t]:forward(self.inputs[t])
+      -- process the outputs
+      self.output[t] = out[self.num_state+1] -- last element is the output vector
+      self.state[t] = {} -- the rest is state
+      for i=1,self.num_state do table.insert(self.state[t], out[i]) end
+      self.tmax = t
+
+      -- record sample sequence
+      for i=1, batch_size do
+        local offset = question_lengths[i]
+        local k = t-2-offset
+        if k >= 1 then -- starting answer sequence
+          --print(string.format('k=%s,t=%s,i=%s,offset=%s it=%s', k, t, i, offset, it))  --TODO
+          self.seq[k][i] = it[i] -- record the samples
+          self.seqLogprobs[k][i] = sampleLogprobs[i] -- and also their log likelihoods
+        end
+      end -- for i=1, batch_size
+    else -- if not can_skip
+      break
+    end -- if not can_skip
+  end  --if t
+
+  return self.output
 end
 
 --[[
@@ -306,7 +424,6 @@ function layer:updateOutput(input)
       self.inputs[t] = {xt,unpack(self.state[t-1])}
       --print(string.format('self.inputs[t=%s] len: %s', t, #self.inputs[t]))
       --print(self.inputs[t])
-      --os.exit()
       -- forward the network
       local out = self.clones[t]:forward(self.inputs[t])
       -- process the outputs
