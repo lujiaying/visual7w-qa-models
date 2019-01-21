@@ -44,13 +44,28 @@ def load_visual7w_baseline_candidate_dict():
     if VISUAL7W_BASELINE_CANDIDATE_DICT:
         return VISUAL7W_BASELINE_CANDIDATE_DICT
 
-    file_path = '%s/data/telling_generation.txt' % (DIR_CUR)
+    #file_path = '%s/data/telling_generation.txt' % (DIR_CUR)
+    #file_path = '/media/drive/Jiaying/attack-vqa-rl/outputs/BoWClassifer-vanilla-40-sampled_answers.txt'  #BowClassifier, non-rl training
+    #file_path = '/media/drive/Jiaying/attack-vqa-rl/outputs/BoWClassifer-rl-Nov03-9-sampled_answers.txt'  #BowClassifier, rl first trial
+    #file_path = '/media/drive/Jiaying/attack-vqa-rl/outputs/BoWClassifer-rl-Nov04-39-sampled_answers.txt'  #BowClassifier, rl 39 epoches
+    #file_path = '/media/drive/Jiaying/attack-vqa-rl/outputs/BoWClassifer-rl_with_baseline-Nov06-18-sampled_answers.txt'  #BowClassifier, rl with baseline 18 epoches
+    #file_path = '/media/drive/Jiaying/attack-vqa-rl/outputs/Multilabel-baseline_Dec14-50-test_set.tsv'  # Multilabel baseline
+    #file_path = '/media/drive/Jiaying/attack-vqa-rl/outputs/BoWClassifer-vanilla-40-sampled_answers_Dec17_SSE.txt'   # BowClassifier, SSE filter
+    #file_path = '/media/drive/Jiaying/attack-vqa-rl/outputs/BoWClassifer-vanilla-40-sampled_answers_Dec17_SSE.txt'   # BowClassifier, SSE filter
+    file_path = '/media/drive/Jiaying/Visual-Distractor-Generation/data/baselines/adversarial_matching_distractors.tsv'  # Adversarial Matching
     with open(file_path) as fopen:
         for line in fopen:
             line_list = line.strip().split('\t')
             qa_id = int(line_list[1])
+            golden_answer = line_list[3]
             candidates = line_list[-1].split('\001')
-            VISUAL7W_BASELINE_CANDIDATE_DICT[qa_id] = candidates
+            candidates_processed = []
+            for candidate in candidates:  #process candidates
+                if candidate in golden_answer:
+                    continue
+                else:
+                    candidates_processed.append(candidate)
+            VISUAL7W_BASELINE_CANDIDATE_DICT[qa_id] = candidates_processed
     return VISUAL7W_BASELINE_CANDIDATE_DICT
 
 def generate_gensim_word2vec():
@@ -346,7 +361,8 @@ def main():
             #qa_pair['multiple_choices'] = [_[0] for _ in get_similar_word_by_emb(wv_from_text, correct_ans)]
             #qa_pair['multiple_choices'] = generate_distracting_answer_add_top(qa_type, top_answer_train, correct_ans)
             #qa_pair['multiple_choices'] = generate_distracting_answer_inferSent(correct_ans, similar_sent_dict)
-            distracting_candidates = get_distracting_answer_by_visual7w_generation(qa_id, correct_ans, load_visual7w_baseline_candidate_dict())
+            distracting_candidates = get_distracting_answer_by_visual7w_generation(qa_id, correct_ans, 
+                    load_visual7w_baseline_candidate_dict())
             qa_pair['multiple_choices'][:len(distracting_candidates)] = distracting_candidates
             if len(distracting_candidates) != 3:
                 error_multiple_choices += 1
@@ -356,7 +372,14 @@ def main():
     #distract_ans_path = '%s/dataset_distract_word_emb.json' % (DIR_DATA_SET_TELLING) # use embedding top3 similarity 
     #distract_ans_path = '%s/dataset_distract_add_top.json' % (DIR_DATA_SET_TELLING) # add phrase of top3 answer 
     #distract_ans_path = '%s/dataset_distract_inferSent.json' % (DIR_DATA_SET_TELLING) # inferSent for similar sent embed
-    distract_ans_path = '%s/dataset_distract_visual7w_baseline_g.json' % (DIR_DATA_SET_TELLING) # visual7w generation mode
+    #distract_ans_path = '%s/dataset_distract_visual7w_baseline_g.json' % (DIR_DATA_SET_TELLING) # visual7w generation mode
+    #distract_ans_path = '%s/dataset_distract_BoWClassifier_nonRL.json' % (DIR_DATA_SET_TELLING) # BoWClassifier non-rl 
+    #distract_ans_path = '%s/dataset_distract_BoWClassifier_RL_Nov03_9.json' % (DIR_DATA_SET_TELLING) # BoWClassifier rl, first trial
+    #distract_ans_path = '%s/dataset_distract_BoWClassifier_RL_Nov04_39.json' % (DIR_DATA_SET_TELLING) # BoWClassifier rl, 39 epoches
+    #distract_ans_path = '%s/dataset_distract_BoWClassifier_RL_WithBaseline_Nov06_18.json' % (DIR_DATA_SET_TELLING) # BoWClassifier rl with baseline ,18 epoches
+    #distract_ans_path = '%s/dataset_distract_Multilabel-baseline_Dec14-50-test_set.json' % (DIR_DATA_SET_TELLING) # Multilabel baseline
+    #distract_ans_path = '%s/dataset_distract_BoWClassifier_40-sampled_Dec17_SSE_test_set.json' % (DIR_DATA_SET_TELLING) # BowClassifier SSE Filter
+    distract_ans_path = '%s/dataset_distract_Adversarial_Matching_Jan18.json' % (DIR_DATA_SET_TELLING) # BowClassifier SSE Filter
     print('error_multiple_choices:%s' % (error_multiple_choices))
     with open(distract_ans_path, 'w') as fw:
         json.dump(dataset, fw, indent=2)

@@ -140,6 +140,7 @@ function utils.get_sequences_token_cnt(sequences)
   for k = 1, #sequences do
     local token_cnt = 0
     local sequence = sequences[k]
+    sequence = string.lower(sequence):gsub('%p', '')
     for token in sequence:gmatch('%w+') do
       token_cnt = token_cnt + 1
     end

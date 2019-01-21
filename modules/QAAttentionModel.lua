@@ -261,7 +261,7 @@ function layer:sample_forward(fc_feats, conv_feats, question_labels, question_le
 
   -- we will write output predictions into tensor seq
   self.seq = torch.LongTensor(self.seq_length, batch_size):zero()
-  self.seqLogprobs = torch.FloatTensor(self.seq_length, batch_size)
+  self.seqLogprobs = torch.FloatTensor(self.seq_length, batch_size):zero()
 
   for t=1,self.seq_length+2 do
     local can_skip = false
@@ -315,12 +315,6 @@ function layer:sample_forward(fc_feats, conv_feats, question_labels, question_le
     
     -- do forward
     if not can_skip then
-      --[[TODO
-      print(string.format('enter not can_skip, t=%s', t))
-      print(self.state)
-      print(string.format('t-1=%s, self.num_state=%s', t-1, self.num_state))
-      print(string.format('self.state[t-1][self.num_state] size:%s', self.state[t-1][self.num_state]:size()))
-      --]]
       local h_state = self.state[t-1][self.num_state]
       local att = self.attention_nns[t]:forward({conv_feats, h_state})
       -- construct the inputs
@@ -339,7 +333,6 @@ function layer:sample_forward(fc_feats, conv_feats, question_labels, question_le
         local offset = question_lengths[i]
         local k = t-2-offset
         if k >= 1 then -- starting answer sequence
-          --print(string.format('k=%s,t=%s,i=%s,offset=%s it=%s', k, t, i, offset, it))  --TODO
           self.seq[k][i] = it[i] -- record the samples
           self.seqLogprobs[k][i] = sampleLogprobs[i] -- and also their log likelihoods
         end
@@ -445,11 +438,15 @@ function layer:updateGradInput(input, gradOutput)
   -- go backwards and lets compute gradients
   local dstate = {[self.tmax] = self.init_state} -- this works when init_state is all zeros
   local dconv_feats = conv_feats:clone():zero()
+  print(string.format('self.tmax=%s', self.tmax))
+  print(self.inputs)
   for t=self.tmax,1,-1 do
     -- concat state gradients and output vector gradients at time step t
     local dout = {}
     for k=1,#dstate[t] do table.insert(dout, dstate[t][k]) end
     table.insert(dout, gradOutput[t])
+    print(dout)
+    print(self.inputs[t])
     local dinputs = self.clones[t]:backward(self.inputs[t], dout)
     -- split the gradient to xt and to state
     local dxt = dinputs[1] -- first element is the input vector

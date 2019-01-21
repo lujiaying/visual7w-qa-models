@@ -50,8 +50,8 @@ function QADatasetLoader:__init(opt)
   end
 
   -- map image index in hdf5 file
-  local image_id = self.h5_file:read('image_id'):all()
-  self.image_data = self.h5_file:read('image_data')
+  local image_id = self.h5_file:read('image_id'):all() -- k: image_id
+  self.image_data = self.h5_file:read('image_data')  --k: img_data
   self.image_id_to_h5idx = {}
   for k = 1, image_id:nElement() do
     self.image_id_to_h5idx[image_id[k]] = k

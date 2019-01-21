@@ -88,6 +88,7 @@ for i, w in pairs(vocab) do
   word_to_ix[w] = i
   vocab_size = vocab_size + 1
 end
+print(string.format('vocab_size=%s, word[vocab_size=%s]=%s', vocab_size, vocab_size, word_to_ix[vocab_size]))
 
 local modules = checkpoint.modules
 local cnn = modules.cnn
@@ -96,8 +97,14 @@ modules = nil
 collectgarbage() -- free some memory
 
 if gpu_mode then cnn:cuda() end
-rnn:createClones()
 if gpu_mode then rnn:cuda() end
+rnn:evaluate()
+cnn:evaluate()
+local rnn_params, rnn_grad_params = rnn:getParameters()
+local cnn_params, cnn_grad_params = cnn:getParameters()
+
+rnn:createClones()
+collectgarbage() -- free some memory
 
 -- prepare QA policy gradient criterion
 local env = {}
@@ -126,14 +133,14 @@ end
 -- Prepare inputs
 -------------------------------------------------------------------------------
 print(string.format('vocab size:%s', vocab_size))
-local MAX_Q_LEN = 15
+local seq_len = 20  -- this is the default qustion or q+a len
 local num_q = #questions
-local question_labels = torch.LongTensor(MAX_Q_LEN, num_q):zero()
+local question_labels = torch.LongTensor(seq_len, num_q):zero()
 local q_len = torch.LongTensor(num_q):zero()
 for k, q in pairs(questions) do
   local s = string.lower(q):gsub('%p', '')
   for token in s:gmatch('%w+') do
-    if q_len[k] < MAX_Q_LEN and word_to_ix[token] then
+    if q_len[k] < seq_len and word_to_ix[token] then
       q_len[k] = q_len[k] + 1
       question_labels[q_len[k]][k] = word_to_ix[token]
     end
@@ -163,8 +170,6 @@ conv_feat_maps = conv_feat_maps:view(1, 512, -1)
 image_encodings = torch.repeatTensor(image_encodings, num_q, 1)
 conv_feat_maps = torch.repeatTensor(conv_feat_maps, num_q, 1, 1)
 
-cnn = nil
-collectgarbage() -- free some memory
 
 -- forward the model to also get generated samples for each image
 local answer_labels, seq_logprobs, seq_logprobs_pertime = rnn:sample(image_encodings, conv_feat_maps, question_labels, q_len)
@@ -179,8 +184,19 @@ for k = 1, #answers do
 end
 local answer_sum_logprobs = utils.cal_answer_sum_logp(seq_logprobs, a_len, gpu_mode)
 
-rnn = nil
-collectgarbage() -- free some memory
+-- sample_forward to see if it is equals
+rnn:training()
+cnn:training()
+rnn_grad_params:zero()
+local seq_logprobs_pertime_sf = rnn:sample_forward(image_encodings, conv_feat_maps, question_labels, q_len)
+local answer_labels_sf = rnn.seq
+local answer_seqLogprobs_sf = rnn.seqLogprobs
+local answers_sf = net_utils.decode_sequence(vocab, answer_labels_sf)
+print(string.format("sf_seqLogprobs size:%s, pertime size:%s", answer_seqLogprobs_sf:size(), seq_logprobs_pertime_sf:size()))
+print(string.format("answer_labels_sf: %s", answer_labels_sf))
+local answer_sum_logprobs_sf = utils.cal_answer_sum_logp(answer_seqLogprobs_sf, a_len, gpu_mode)
+print(string.format('answer_sum_logprob:%s', answer_sum_logprobs_sf))
+
 
 -- calculate policy gradient loss
 print(string.format('img size:%s', img:size()))
@@ -199,15 +215,23 @@ for k=1, num_q do
   labels[k] = seq
   images[k] = img:clone()
 end
-print(string.format('labels(q+a): %s', labels))
+--print(string.format('labels(q+a): %s', labels))
 labels = labels:transpose(1,2):contiguous()
-local pg_loss = qa_pg_crit:forward({images, labels, q_len:contiguous(), answer_sum_logprobs}, {})
-print(string.format('images size:%s', images:size()))
-print(string.format('answer lens:%s', a_len))
+--local pg_loss = qa_pg_crit:forward({images, labels, q_len:contiguous(), answer_sum_logprobs}, {})
+local pg_loss = qa_pg_crit:forward({images, labels, q_len:contiguous(), answer_sum_logprobs_sf}, {})
+--print(string.format('images size:%s', images:size()))
+--print(string.format('answer lens:%s', a_len))
 print(string.format('policy_gradient loss:%s', pg_loss))
-if gpu_mode then seq_logprobs_pertime = seq_logprobs_pertime:cuda() end
-local dlogprobs = qa_pg_crit:backward({seq_logprobs_pertime, labels, q_len:contiguous()}, {})
+--if gpu_mode then seq_logprobs_pertime = seq_logprobs_pertime:cuda() end
+--local dlogprobs = qa_pg_crit:backward({seq_logprobs_pertime, labels, q_len:contiguous()}, {})
+local dlogprobs = qa_pg_crit:backward({seq_logprobs_pertime_sf, labels, q_len:contiguous()}, {})
 print(string.format('dlogprobs size:%s', dlogprobs:size()))
+
+local dfc, dconv, _ = unpack(rnn:backward({image_encodings, conv_feat_maps, labels}, dlogprobs))
+
+cnn = nil
+rnn = nil
+collectgarbage() -- free some memory
 
 -------------------------------------------------------------------------------
 -- Output results
@@ -218,10 +242,17 @@ print('** QA demo on ' .. image_file .. ' **\n')
 for k = 1, #answers do
   print(string.format('Q: %s ?', questions[k]))
   print(string.format('A: %s .', answers[k]))
+  print( string.format("answer_sf: %s", answers_sf[k]))
   local actual_seq_logprobs = {}
   for t = 1, a_len[k] do
     table.insert(actual_seq_logprobs, seq_logprobs[{t, k}])
   end
-  print( string.format("Answer len:%s, logprobs: %s", answer_len, table.concat(actual_seq_logprobs, ", ")) )
+  local actual_seq_logprobs_sf = {}
+  for t = 1, a_len[k] do
+    table.insert(actual_seq_logprobs_sf, answer_seqLogprobs_sf[{t, k}])
+  end
+  print( string.format("Answer len:%s, logprobs: %s", a_len[k], table.concat(actual_seq_logprobs, ", ")) )
+  print( string.format("Answer len:%s, logprobs_sf: %s", a_len[k], table.concat(actual_seq_logprobs_sf, ", ")) )
+  print(answer_seqLogprobs_sf[{ {}, k }])
   print('\n')
 end
